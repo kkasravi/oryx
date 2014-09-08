@@ -16,38 +16,49 @@
 package com.cloudera.oryx.ml.serving.als;
 
 import java.util.Iterator;
+import java.util.List;
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
+import javax.ws.rs.core.GenericType;
+
+import org.junit.Assert;
 
 import com.cloudera.oryx.lambda.KeyMessage;
 import com.cloudera.oryx.lambda.serving.AbstractServingTest;
 import com.cloudera.oryx.lambda.serving.ServingModelManager;
+import com.cloudera.oryx.ml.serving.IDValue;
 import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 import com.cloudera.oryx.ml.serving.als.model.TestALSModelFactory;
 
 public abstract class AbstractALSServingTest extends AbstractServingTest {
 
+  protected static final GenericType<List<IDValue>> LIST_ID_VALUE_TYPE =
+      new GenericType<List<IDValue>>() {};
+
   @Override
-  protected final Class<? extends ServletContextListener> getInitListenerClass() {
+  protected Class<? extends ServletContextListener> getInitListenerClass() {
     return MockManagerInitListener.class;
   }
 
-  public static final class MockManagerInitListener implements ServletContextListener {
+  public static class MockManagerInitListener implements ServletContextListener {
     @Override
-    public void contextInitialized(ServletContextEvent sce) {
+    public final void contextInitialized(ServletContextEvent sce) {
       sce.getServletContext().setAttribute(
           AbstractALSResource.MODEL_MANAGER_KEY,
-          new MockServingModelManager());
+          getModelManager());
+    }
+    protected MockServingModelManager getModelManager() {
+      return new MockServingModelManager();
     }
     @Override
-    public void contextDestroyed(ServletContextEvent sce) {
+    public final void contextDestroyed(ServletContextEvent sce) {
       // do nothing
     }
   }
 
-  private static final class MockServingModelManager implements ServingModelManager<String> {
+  protected static class MockServingModelManager implements ServingModelManager<String> {
     @Override
-    public void consume(Iterator<KeyMessage<String, String>> updateIterator) {
+    public final void consume(Iterator<KeyMessage<String, String>> updateIterator) {
       throw new UnsupportedOperationException();
     }
     @Override
@@ -55,9 +66,24 @@ public abstract class AbstractALSServingTest extends AbstractServingTest {
       return TestALSModelFactory.buildTestModel();
     }
     @Override
-    public void close() {
+    public final void close() {
       // do nothing
     }
+  }
+
+  protected final void testOffset(String requestPath, int howMany, int offset, int expectedSize) {
+    List<?> results = target(requestPath)
+        .queryParam("howMany", Integer.toString(howMany))
+        .queryParam("offset", Integer.toString(offset))
+        .request().get(LIST_ID_VALUE_TYPE);
+    Assert.assertEquals(expectedSize, results.size());
+  }
+
+  protected final void testHowMany(String requestPath, int howMany, int expectedSize) {
+    List<?> results = target(requestPath)
+        .queryParam("howMany",Integer.toString(howMany))
+        .request().get(LIST_ID_VALUE_TYPE);
+    Assert.assertEquals(expectedSize, results.size());
   }
 
 }

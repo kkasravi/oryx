@@ -15,77 +15,88 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
-import java.util.Arrays;
 import java.util.List;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
+import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
+import com.google.common.base.Function;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Ordering;
+
+import com.cloudera.oryx.common.collection.Pair;
+import com.cloudera.oryx.common.collection.PairComparators;
+import com.cloudera.oryx.common.math.VectorMath;
 import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.cloudera.oryx.ml.serving.IDValue;
+import com.cloudera.oryx.ml.serving.OryxServingException;
+import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 
 /**
- * <p>Responds to a GET request to
- * {@code /mostSurprising/[userID](?howMany=n)}
- * and in turn calls {link com.cloudera.oryx.als.common.OryxRecommender#mostSurprising(String, int)}.
- * {@code howMany} is the desired number of results to return. If {@code howMany} is not
- * specified, defaults to {link com.cloudera.oryx.als.serving.web.AbstractALSServlet#DEFAULT_HOW_MANY}.</p>
+ * <p>Responds to a GET request to {@code /mostSurprising/[userID](?howMany=n)(?offset=o)}.
  *
- * <p>CSV output contains one item per line, and each line is of the form {@code itemID, strength},
- * like {@code 325, 0.53}. Strength is an opaque indicator of the relative surprise of the item.
- * Higher means more surprising</p>
+ * <p>This is like an anti-{@code recommend} method, where the results are taken from among
+ * the items that the user has already interacted with, and the results are items that
+ * seem least-likely to be interacted with according to the model.
+ * Outputs contain item and score pairs, where the score is an opaque
+ * value where higher values mean more surprising.</p>
+ *
+ * <p>If the user, item or user's interacted items are not known to the model, an
+ * HTTP 404 Not Found response is generated.</p>
+ *
+ * <p>{@code howMany} and {@code offset} behavior, and output, are as in {@link Recommend}.</p>
  */
 @Path("/mostSurprising")
 public final class MostSurprising extends AbstractALSResource {
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
-  public Response getNoArgs() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "path /{userID} required")).build();
+  public Response get() {
+    return Response.status(Response.Status.BAD_REQUEST).entity(
+        new ErrorResponse(Response.Status.BAD_REQUEST, "User ID is required")).build();
   }
 
   @GET
-  @Path("{userId}")
-  @Produces(MediaType.APPLICATION_JSON)
-  public List<RecommendResponse> get() {
-/*
-    CharSequence pathInfo = request.getPathInfo();
-    if (pathInfo == null) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No path");
-      return;
-    }
-    Iterator<String> pathComponents = SLASH.split(pathInfo).iterator();
-    String userID;
-    try {
-      userID = pathComponents.next();
-    } catch (NoSuchElementException nsee) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, nsee.toString());
-      return;
-    }
-    if (pathComponents.hasNext()) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Path too long");
-      return;
-    }
+  @Path("{userID}")
+  @Produces({MediaType.APPLICATION_JSON,MediaType.TEXT_PLAIN})
+  public List<IDValue> get(
+      @PathParam("userID") String userID,
+      @DefaultValue("10") @QueryParam("howMany") int howMany,
+      @DefaultValue("0") @QueryParam("offset") int offset) throws OryxServingException {
 
-    userID = unescapeSlashHack(userID);
+    check(howMany > 0, "howMany must be positive");
+    check(offset >= 0, "offset must be nonnegative");
 
-    OryxRecommender recommender = getRecommender();
-    try {
-      outputALSResult(request,
-                      response,
-                      recommender.mostSurprising(userID, getNumResultsToFetch(request)));
-    } catch (NoSuchUserException nsue) {
-      response.sendError(HttpServletResponse.SC_NOT_FOUND, nsue.toString());
-    } catch (NotReadyException nre) {
-      response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, nre.toString());
-    } catch (IllegalArgumentException iae) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, iae.toString());
-    } catch (UnsupportedOperationException uoe) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, uoe.toString());
+    ALSServingModel model = getALSServingModel();
+    float[] userVector = model.getUserVector(userID);
+    check(userVector != null, Response.Status.NOT_FOUND, userID);
+    List<Pair<String,float[]>> knownItemVectors = model.getKnownItemVectorsForUser(userID);
+    check(knownItemVectors != null, Response.Status.NOT_FOUND, userID);
+
+    Iterable<Pair<String,Double>> idDots =
+        Iterables.transform(knownItemVectors, new DotsFunction(userVector));
+
+    Ordering<Pair<?,Double>> ordering = Ordering.from(PairComparators.<Double>bySecond());
+    return toIDValueResponse(ordering.leastOf(idDots, howMany + offset), howMany, offset);
+  }
+
+  private static final class DotsFunction
+      implements Function<Pair<String,float[]>,Pair<String,Double>> {
+    private final float[] userVector;
+    DotsFunction(float[] userVector) {
+      this.userVector = userVector;
     }
-  */
-    return Arrays.asList(new RecommendResponse("1", 5));
+    @Override
+    public Pair<String,Double> apply(Pair<String,float[]> itemIDVector) {
+      return new Pair<>(
+          itemIDVector.getFirst(),
+          VectorMath.dot(userVector, itemIDVector.getSecond()));
+    }
   }
 
 }

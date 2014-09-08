@@ -27,6 +27,7 @@ import javax.ws.rs.core.PathSegment;
 import javax.ws.rs.core.Response;
 
 import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.cloudera.oryx.ml.serving.IDValue;
 
 /**
  * <p>Responds to a GET request to
@@ -53,14 +54,15 @@ public final class RecommendToAnonymous extends AbstractALSResource {
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
-  public Response getNoArgs() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "path /{itemID}+ required")).build();
+  public Response get() {
+    return Response.status(Response.Status.BAD_REQUEST).entity(
+        new ErrorResponse(Response.Status.BAD_REQUEST, "One or more item IDs required")).build();
   }
 
   @GET
   @Path("{itemID : .+}")
   @Produces(MediaType.APPLICATION_JSON)
-  public List<RecommendResponse> get(@PathParam("itemID") List<PathSegment> pathSegmentList,
+  public List<IDValue> get(@PathParam("itemID") String itemID,
                                      @QueryParam("howMany") int howMany,
                                      @QueryParam("offset") int offset,
                                      @QueryParam("considerKnownItems") boolean considerKnownItems,
@@ -104,7 +106,7 @@ public final class RecommendToAnonymous extends AbstractALSResource {
       response.sendError(HttpServletResponse.SC_BAD_REQUEST, iae.toString());
     }
   */
-    return Arrays.asList(new RecommendResponse("1", 5));
+    return Arrays.asList(new IDValue("1", 5));
   }
 
 }

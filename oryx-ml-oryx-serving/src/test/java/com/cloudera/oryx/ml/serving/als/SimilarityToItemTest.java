@@ -15,26 +15,26 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
-import javax.ws.rs.client.Entity;
+import java.util.List;
+import javax.ws.rs.BadRequestException;
 import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
 
 import org.junit.Assert;
 import org.junit.Test;
 
-public final class PreferenceTest extends AbstractALSServingTest {
+public final class SimilarityToItemTest extends AbstractALSServingTest {
 
-  @Test
-  public void testPost() {
-    Response response = target("pref").path("U1").path("I2").request()
-        .accept(MediaType.APPLICATION_JSON_TYPE).post(Entity.text("1"));
-    Assert.assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+  @Test(expected = BadRequestException.class)
+  public void testNoArg() {
+    target("/similarityToItem").request().get(String.class);
   }
 
   @Test
-  public void testDelete() {
-    Response response = target("pref").path("U1").path("I2").request()
-        .accept(MediaType.APPLICATION_JSON_TYPE).delete();
-    Assert.assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+  public void testSimilarityToItem() {
+    List<Double> items = target("similarityToItem/I0/I1/I2").request()
+        .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_DOUBLE_TYPE);
+    Assert.assertEquals(2, items.size());
+    Assert.assertEquals(0.9042602737279073, items.get(0), FLOAT_EPSILON);
+    Assert.assertEquals(-0.26486863115406456, items.get(1), FLOAT_EPSILON);
   }
 }

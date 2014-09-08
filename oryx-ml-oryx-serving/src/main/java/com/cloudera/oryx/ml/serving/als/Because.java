@@ -15,8 +15,8 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
-import java.util.Collections;
 import java.util.List;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
@@ -24,77 +24,83 @@ import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+
+import com.google.common.base.Function;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Ordering;
+
+import com.cloudera.oryx.common.collection.Pair;
+import com.cloudera.oryx.common.collection.PairComparators;
+import com.cloudera.oryx.common.math.VectorMath;
 import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.cloudera.oryx.ml.serving.IDValue;
+import com.cloudera.oryx.ml.serving.OryxServingException;
+import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 
 /**
- * <p>Responds to a GET request to {@code /because/[userID]/[itemID](?howMany=n)(&offset=o)},
- * and in turn calls {link OryxRecommender#recommendedBecause(String, String, int)}.
- * {@code offset} is an offset into the entire list of results; {@code howMany} is the desired
- * number of results to return from there. For example, {@code offset=30} and {@code howMany=5}
- * will cause the implementation to retrieve 35 results internally and output the last 5.
- * If {@code howMany} is not specified, defaults to {link AbstractALSServlet#DEFAULT_HOW_MANY}.
- * {@code offset} defaults to 0.</p>
+ * <p>Responds to a GET request to {@code /because/[userID]/[itemID](?howMany=n)(&offset=o)}.</p>
  *
- * <p>Outputs item/score pairs like {@link Recommend} does.</p>
+ * <p>Results are items that the user has interacted with that best explain why a given
+ * item was recommended. Outputs contain item and score pairs, where the score is an opaque
+ * value where higher values mean more relevant to recommendation.</p>
+ *
+ * <p>If the user, item or user's interacted items are not known to the model, an
+ * HTTP 404 Not Found response is generated.</p>
+ *
+ * <p>{@code howMany} and {@code offset} behavior, and output, are as in {@link Recommend}.</p>
  */
 @Path("/because")
 public final class Because extends AbstractALSResource {
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
-  public Response getNoArgs() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "path /{userID}/{itemId} required")).build();
+  public Response get() {
+    return Response.status(Response.Status.BAD_REQUEST).entity(
+        new ErrorResponse(Response.Status.BAD_REQUEST, "User ID and item ID are required")).build();
   }
 
   @GET
-  @Path("{userId}/{itemId}")
+  @Path("{userID}/{itemID}")
   @Produces(MediaType.APPLICATION_JSON)
-  public List<RecommendResponse> get(@PathParam("userId") String userId,
-                                     @PathParam("itemId") String itemId,
-                                     @QueryParam("howMany") int howMany,
-                                     @QueryParam("offset") int offset) {
-/*
-    CharSequence pathInfo = request.getPathInfo();
-    if (pathInfo == null) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No path");
-      return;
-    }
-    Iterator<String> pathComponents = SLASH.split(pathInfo).iterator();
-    String userID;
-    String itemID;
-    try {
-      userID = pathComponents.next();
-      itemID = pathComponents.next();
-    } catch (NoSuchElementException nsee) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, nsee.toString());
-      return;
-    }
-    if (pathComponents.hasNext()) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Path too long");
-      return;
-    }
+  public List<IDValue> get(
+      @PathParam("userID") String userID,
+      @PathParam("itemID") String itemID,
+      @DefaultValue("10") @QueryParam("howMany") int howMany,
+      @DefaultValue("0") @QueryParam("offset") int offset) throws OryxServingException {
 
-    userID = unescapeSlashHack(userID);
-    itemID = unescapeSlashHack(itemID);
+    check(howMany > 0, "howMany must be positive");
+    check(offset >= 0, "offset must be non-negative");
 
-    OryxRecommender recommender = getRecommender();
-    try {
-      outputALSResult(request,
-                      response,
-                      recommender.recommendedBecause(userID, itemID, getNumResultsToFetch(request)));
-    } catch (NoSuchUserException nsue) {
-      response.sendError(HttpServletResponse.SC_NOT_FOUND, nsue.toString());
-    } catch (NoSuchItemException nsie) {
-      response.sendError(HttpServletResponse.SC_NOT_FOUND, nsie.toString());
-    } catch (NotReadyException nre) {
-      response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, nre.toString());
-    } catch (IllegalArgumentException iae) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, iae.toString());
-    } catch (UnsupportedOperationException uoe) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, uoe.toString());
+    ALSServingModel model = getALSServingModel();
+    float[] itemVector = model.getItemVector(itemID);
+    check(itemVector != null, Response.Status.NOT_FOUND, itemID);
+    List<Pair<String,float[]>> knownItemVectors = model.getKnownItemVectorsForUser(userID);
+    check(knownItemVectors != null, Response.Status.NOT_FOUND, userID);
+
+    Iterable<Pair<String,Double>> idSimilarities =
+        Iterables.transform(knownItemVectors, new CosineSimilarityFunction(itemVector));
+
+    Ordering<Pair<?,Double>> ordering =
+        Ordering.from(PairComparators.<Double>bySecond());
+    return toIDValueResponse(
+        ordering.greatestOf(idSimilarities, howMany + offset), howMany, offset);
+  }
+
+  private static final class CosineSimilarityFunction
+      implements Function<Pair<String,float[]>,Pair<String,Double>> {
+    private final float[] itemVector;
+    private final double itemVectorNorm;
+    CosineSimilarityFunction(float[] itemVector) {
+      this.itemVector = itemVector;
+      this.itemVectorNorm = VectorMath.norm(itemVector);
     }
- */
-    return Collections.emptyList();
+    @Override
+    public Pair<String,Double> apply(Pair<String,float[]> itemIDVector) {
+      float[] otherItemVector = itemIDVector.getSecond();
+      double cosineSimilarity =  VectorMath.dot(itemVector, otherItemVector) /
+          (itemVectorNorm * VectorMath.norm(otherItemVector));
+      return new Pair<>(itemIDVector.getFirst(), cosineSimilarity);
+    }
   }
 
 }

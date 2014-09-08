@@ -15,7 +15,7 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
@@ -25,70 +25,59 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.PathSegment;
 import javax.ws.rs.core.Response;
 
-import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.google.common.base.Preconditions;
 
+import com.cloudera.oryx.common.math.VectorMath;
+import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.cloudera.oryx.ml.serving.OryxServingException;
+import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 
 /**
- * <p>Responds to a GET request to {@code /similarityToItem/[toItemID]/itemID1(/[itemID2]/...)},
- * and in turn calls {link OryxRecommender#similarityToItem(String, String...)} with the supplied values.</p>
+ * <p>Responds to a GET request to {@code /similarityToItem/[toItemID]/[itemID1](/[itemID2]/...)}.
  *
- * <p>Unknown item IDs are ignored, unless all are unknown or {@code toItemID} is unknown, in which case a
- * {link HttpServletResponse#SC_BAD_REQUEST} status is returned.</p>
+ * <p>This computes cosine similarity between an item and one or more other items.</p>
  *
- * <p>The output are similarities, in the same order as the item IDs, one per line.</p>
+ * <p>If the first given item is not known to the model, an
+ * HTTP 404 Not Found response is generated. For other items, if not known to the model,
+ * a 0.0 is returned in the response in that place</p>
+ *
+ * <p>The output are similarities, in the same order as the item IDs as a JSON array
+ * of double values.</p>
  */
 @Path("/similarityToItem")
 public final class SimilarityToItem extends AbstractALSResource {
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
-  public Response getNoArgs() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "path /{toItemID}/{itemId}+ required")).build();
+  public Response get() {
+    return Response.status(Response.Status.BAD_REQUEST).entity(
+        new ErrorResponse(Response.Status.BAD_REQUEST, "toItemID is required")).build();
   }
 
   @GET
-  @Produces(MediaType.APPLICATION_JSON)
   @Path("{toItemID}/{itemID : .+}")
-  public List<Double> get(@PathParam("toItemID") String toItemID,
-                          @PathParam("itemID") List<PathSegment> pathSegmentList) {
-/*
-    CharSequence pathInfo = request.getPathInfo();
-    if (pathInfo == null) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No path");
-      return;
-    }
-    Iterator<String> pathComponents = SLASH.split(pathInfo).iterator();
-    String toItemID;
-    List<String> itemIDsList = Lists.newArrayList();
-    try {
-      toItemID = pathComponents.next();
-      while (pathComponents.hasNext()) {
-        itemIDsList.add(pathComponents.next());
+  @Produces(MediaType.APPLICATION_JSON)
+  public List<Double> get(
+      @PathParam("toItemID") String toItemID,
+      @PathParam("itemID") List<PathSegment> pathSegmentsList) throws OryxServingException {
+
+    ALSServingModel alsServingModel = getALSServingModel();
+    float[] toItemFeatures = alsServingModel.getItemVector(toItemID);
+    check(toItemFeatures != null, Response.Status.NOT_FOUND, toItemID);
+
+    double toItemFeaturesNorm = VectorMath.norm(toItemFeatures);
+    List<Double> results = new ArrayList<>(pathSegmentsList.size());
+    for (PathSegment item : pathSegmentsList) {
+      float[] itemFeatures = alsServingModel.getItemVector(item.getPath());
+      if (itemFeatures == null) {
+        results.add(0.0);
+      } else {
+        double value = VectorMath.dot(itemFeatures, toItemFeatures) /
+            (toItemFeaturesNorm * VectorMath.norm(itemFeatures));
+        Preconditions.checkState(!(Double.isInfinite(value) || Double.isNaN(value)), "Bad similarity");
+        results.add(value);
       }
-    } catch (NoSuchElementException nsee) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, nsee.toString());
-      return;
     }
-    if (itemIDsList.isEmpty()) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No items");
-      return;
-    }
-
-    toItemID = unescapeSlashHack(toItemID);
-    String[] itemIDs = itemIDsList.toArray(new String[itemIDsList.size()]);
-    unescapeSlashHack(itemIDs);
-
-    OryxRecommender recommender = getRecommender();
-    try {
-      float[] similarities = recommender.similarityToItem(toItemID, itemIDs);
-      output(request, response, similarities);
-    } catch (NoSuchItemException nsie) {
-      response.sendError(HttpServletResponse.SC_NOT_FOUND, nsie.toString());
-    } catch (NotReadyException nre) {
-      response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, nre.toString());
-    }
-  */
-    return Arrays.asList(1.2, 3.4);
+    return results;
   }
-
 }

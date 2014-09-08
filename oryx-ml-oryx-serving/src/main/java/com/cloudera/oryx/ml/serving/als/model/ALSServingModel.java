@@ -17,19 +17,29 @@ package com.cloudera.oryx.ml.serving.als.model;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import com.carrotsearch.hppc.ObjectObjectMap;
 import com.carrotsearch.hppc.ObjectObjectOpenHashMap;
+import com.carrotsearch.hppc.ObjectOpenHashSet;
+import com.carrotsearch.hppc.ObjectSet;
 import com.carrotsearch.hppc.cursors.ObjectCursor;
+import com.carrotsearch.hppc.cursors.ObjectObjectCursor;
+import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Ordering;
 import org.apache.commons.math3.linear.RealMatrix;
 
 import com.cloudera.oryx.common.collection.NotContainsPredicate;
+import com.cloudera.oryx.common.collection.Pair;
+import com.cloudera.oryx.common.collection.PairComparators;
 import com.cloudera.oryx.common.math.LinearSystemSolver;
 import com.cloudera.oryx.common.math.Solver;
 import com.cloudera.oryx.common.math.VectorMath;
@@ -38,7 +48,7 @@ public final class ALSServingModel {
 
   private final ObjectObjectMap<String,float[]> X;
   private final ObjectObjectMap<String,float[]> Y;
-  private final ObjectObjectMap<String,Collection<String>> knownItems;
+  private final ObjectObjectMap<String,ObjectSet<String>> knownItems;
   private final ReadWriteLock xLock;
   private final ReadWriteLock yLock;
   private final ReadWriteLock knownItemsLock;
@@ -97,7 +107,19 @@ public final class ALSServingModel {
     }
   }
 
-  public Collection<String> getKnownItems(String user) {
+  void setItemVector(String item, float[] vector) {
+    Preconditions.checkNotNull(vector);
+    Preconditions.checkArgument(vector.length == features);
+    Lock lock = yLock.writeLock();
+    lock.lock();
+    try {
+      Y.put(item, vector);
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  ObjectSet<String> getKnownItems(String user) {
     Lock lock = this.knownItemsLock.readLock();
     lock.lock();
     try {
@@ -108,15 +130,7 @@ public final class ALSServingModel {
   }
 
   void addKnownItems(String user, Collection<String> items) {
-    Collection<String> knownItemsForUser;
-
-    Lock lock = this.knownItemsLock.readLock();
-    lock.lock();
-    try {
-      knownItemsForUser = this.knownItems.get(user);
-    } finally {
-      lock.unlock();
-    }
+    ObjectSet<String> knownItemsForUser = getKnownItems(user);
 
     if (knownItemsForUser == null) {
       Lock writeLock = this.knownItemsLock.writeLock();
@@ -125,7 +139,7 @@ public final class ALSServingModel {
         // Check again
         knownItemsForUser = this.knownItems.get(user);
         if (knownItemsForUser == null) {
-          knownItemsForUser = Collections.synchronizedSet(new HashSet<String>());
+          knownItemsForUser = new ObjectOpenHashSet<>();
           this.knownItems.put(user, knownItemsForUser);
         }
       } finally {
@@ -133,7 +147,91 @@ public final class ALSServingModel {
       }
     }
 
-    knownItemsForUser.addAll(items);
+    synchronized (knownItemsForUser) {
+      for (String item : items) {
+        knownItemsForUser.add(item);
+      }
+    }
+  }
+
+  public List<Pair<String,float[]>> getKnownItemVectorsForUser(String user) {
+    float[] userVector = getUserVector(user);
+    if (userVector == null) {
+      return null;
+    }
+    ObjectSet<String> knownItems = getKnownItems(user);
+    if (knownItems == null || knownItems.isEmpty()) {
+      return null;
+    }
+    List<Pair<String,float[]>> idVectors = new ArrayList<>(knownItems.size());
+    Lock lock = yLock.readLock();
+    lock.lock();
+    try {
+      synchronized (knownItems) {
+        for (ObjectCursor<String> knownItem : knownItems) {
+          String itemID = knownItem.value;
+          idVectors.add(new Pair<>(itemID, Y.get(itemID)));
+        }
+      }
+    } finally {
+      lock.unlock();
+    }
+    return idVectors;
+  }
+
+  public List<Pair<String,Double>> topDotWithUserVector(String user,
+                                                        int howMany,
+                                                        boolean considerKnownItems) {
+    float[] userVector = getUserVector(user);
+    if (userVector == null) {
+      return null;
+    }
+
+    Iterable<ObjectObjectCursor<String,float[]>> entries = Y;
+
+    if (!considerKnownItems) {
+      ObjectSet<String> knownItems = getKnownItems(user);
+      if (knownItems != null && !knownItems.isEmpty()) {
+        entries = Iterables.filter(entries, new NotKnownPredicate(knownItems));
+      }
+    }
+
+    Iterable<Pair<String,Double>> idDots =
+        Iterables.transform(entries, new DotsFunction(userVector));
+    return topN(idDots, howMany);
+  }
+
+  public List<Pair<String,Double>> mostSimilarItems(List<String> itemsList, int howMany) {
+    List<Pair<String,Double>> itemScoresList = new ArrayList<>(itemsList.size());
+    Iterable<ObjectObjectCursor<String,float[]>> entries = Y;
+
+    // TODO need lock among other things
+    for (ObjectObjectCursor<String,float[]> entry : entries) {
+      double total = 0.0;
+      double entryNorm = VectorMath.norm(entry.value);
+      for (String item : itemsList) {
+        if (!item.equalsIgnoreCase(entry.key)) {
+          float[] itemFeatures = getItemVector(item);
+          double similarity = VectorMath.dot(entry.value, itemFeatures)/(entryNorm * VectorMath.norm(itemFeatures));
+          total += similarity;
+        }
+      }
+      double result = total / itemsList.size();
+      Preconditions.checkState(!(Double.isInfinite(result) || Double.isNaN(result)), "Bad similarity value");
+      itemScoresList.add(new Pair<>(entry.key, result));
+    }
+    return topN(itemScoresList, howMany);
+  }
+
+  private List<Pair<String,Double>> topN(Iterable<Pair<String,Double>> pairs, int howMany) {
+    Ordering<Pair<?,Double>> ordering = Ordering.from(PairComparators.<Double>bySecond());
+    Lock lock = yLock.readLock();
+    lock.lock();
+    try {
+      return ordering.greatestOf(pairs, howMany);
+    } finally {
+      lock.unlock();
+    }
   }
 
   public Collection<String> getAllItemIDs() {
@@ -160,18 +258,6 @@ public final class ALSServingModel {
       lock.unlock();
     }
     return new LinearSystemSolver().getSolver(YTY);
-  }
-
-  void setItemVector(String item, float[] vector) {
-    Preconditions.checkNotNull(vector);
-    Preconditions.checkArgument(vector.length == features);
-    Lock lock = yLock.writeLock();
-    lock.lock();
-    try {
-      Y.put(item, vector);
-    } finally {
-      lock.unlock();
-    }
   }
 
   /**
@@ -203,13 +289,20 @@ public final class ALSServingModel {
   /**
    * @param items items that should be retained; all else can be removed
    */
-  void pruneKnownItems(Collection<String> items) {
+  void pruneKnownItems(Set<String> items) {
     Lock lock = this.knownItemsLock.readLock();
     lock.lock();
     try {
-      for (ObjectCursor<Collection<String>> collectionObjectCursor : this.knownItems.values()) {
-        // Assuming this collection is thread-safe:
-        collectionObjectCursor.value.retainAll(items);
+      for (ObjectCursor<ObjectSet<String>> collectionObjectCursor : this.knownItems.values()) {
+        ObjectSet<String> knownItemsForUser = collectionObjectCursor.value;
+        synchronized (knownItemsForUser) {
+          Iterator<ObjectCursor<String>> it = knownItemsForUser.iterator();
+          while (it.hasNext()) {
+            if (!items.contains(it.next().value)) {
+              it.remove();
+            }
+          }
+        }
       }
     } finally {
       lock.unlock();
@@ -221,6 +314,49 @@ public final class ALSServingModel {
     return "ALSServingModel[features:" + features + ", implicit:" + implicit +
         ", X:(" + X.size() + " users), Y:(" + Y.size() + " items), knownItems:(" +
         knownItems.size() + " users)]";
+  }
+
+  private static final class DotsFunction
+      implements Function<ObjectObjectCursor<String,float[]>,Pair<String,Double>> {
+    private final float[] userVector;
+    DotsFunction(float[] userVector) {
+      this.userVector = userVector;
+    }
+    @Override
+    public Pair<String,Double> apply(ObjectObjectCursor<String,float[]> itemIDVector) {
+      return new Pair<>(itemIDVector.key, VectorMath.dot(userVector, itemIDVector.value));
+    }
+  }
+
+  private static final class CosineSimilarityFunction
+      implements Function<ObjectObjectCursor<String,float[]>,Pair<String,Double>> {
+    private final float[] itemVector;
+    private final double itemVectorNorm;
+    CosineSimilarityFunction(float[] itemVector) {
+      this.itemVector = itemVector;
+      this.itemVectorNorm = VectorMath.norm(itemVector);
+    }
+    @Override
+    public Pair<String,Double> apply(ObjectObjectCursor<String,float[]> itemIDVector) {
+      float[] otherItemVector = itemIDVector.value;
+      double cosineSimilarity =  VectorMath.dot(itemVector, otherItemVector) /
+          (itemVectorNorm * VectorMath.norm(otherItemVector));
+      return new Pair<>(itemIDVector.key, cosineSimilarity);
+    }
+  }
+
+  private static final class NotKnownPredicate
+      implements Predicate<ObjectObjectCursor<String,float[]>> {
+    private final ObjectSet<String> knownItemsForUser;
+    NotKnownPredicate(ObjectSet<String> knownItemsForUser) {
+      this.knownItemsForUser = knownItemsForUser;
+    }
+    @Override
+    public boolean apply(ObjectObjectCursor<String,float[]> input) {
+      synchronized (knownItemsForUser) {
+        return !knownItemsForUser.contains(input.key);
+      }
+    }
   }
 
 }

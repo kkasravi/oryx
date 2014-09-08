@@ -96,6 +96,7 @@ public final class SpeedLayer<K,M,U> implements Closeable {
     long blockIntervalMS = TimeUnit.MILLISECONDS.convert(blockIntervalSec, TimeUnit.SECONDS);
 
     SparkConf sparkConf = new SparkConf();
+    sparkConf.setIfMissing("spark.serializer", "org.apache.spark.serializer.KryoSerializer");
     sparkConf.setIfMissing("spark.streaming.blockInterval", Long.toString(blockIntervalMS));
     sparkConf.setMaster(streamingMaster);
     sparkConf.setAppName("OryxSpeedLayer");
@@ -222,7 +223,6 @@ public final class SpeedLayer<K,M,U> implements Closeable {
     try {
       return ClassUtils.loadInstanceOf(updateDecoderClass);
     } catch (IllegalArgumentException iae) {
-      log.warn("No no-arg constructor for {}; trying nullable one-arg", updateDecoderClass);
       // special case the Kafka decoder, which wants an optional nullable parameter unfortunately
       return ClassUtils.loadInstanceOf(updateDecoderClass.getName(),
                                        updateDecoderClass,

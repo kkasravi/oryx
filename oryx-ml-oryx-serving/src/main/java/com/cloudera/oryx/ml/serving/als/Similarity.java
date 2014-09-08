@@ -18,6 +18,7 @@ package com.cloudera.oryx.ml.serving.als;
 
 import java.util.Arrays;
 import java.util.List;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
@@ -25,9 +26,7 @@ import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.PathSegment;
-import javax.ws.rs.core.Response;
-
-import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.cloudera.oryx.ml.serving.IDValue;
 
 /**
  * <p>Responds to a GET request to {@code /similarity/[itemID1](/[itemID2]/...)(?howMany=n)(&offset=o)(&rescorerParams=...)},
@@ -51,18 +50,12 @@ import com.cloudera.oryx.ml.serving.ErrorResponse;
 public final class Similarity extends AbstractALSResource {
 
   @GET
+  @Path("{itemID : .+}")
   @Produces(MediaType.APPLICATION_JSON)
-  public Response getNoArgs() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "path /{itemID}+ required")).build();
-  }
-
-  @GET
-  @Path("{itemID: .+}")
-  @Produces(MediaType.APPLICATION_JSON)
-  public List<RecommendResponse> get(@PathParam("itemID") List<PathSegment> pathSegmentList,
-                                     @QueryParam("howMany") int howMany,
-                                     @QueryParam("offset") int offset,
-                                     @QueryParam("rescorerParams") List<String> rescorerParams) {
+  public List<IDValue> get(@PathParam("itemID") List<PathSegment> pathSegmentsList,
+                           @DefaultValue("10") @QueryParam("howMany") int howMany,
+                           @DefaultValue("0") @QueryParam("offset") int offset,
+                           @QueryParam("rescorerParams") List<String> rescorerParams) {
 /*
     CharSequence pathInfo = request.getPathInfo();
     if (pathInfo == null) {
@@ -109,7 +102,7 @@ public final class Similarity extends AbstractALSResource {
       response.sendError(HttpServletResponse.SC_BAD_REQUEST, iae.toString());
     }
   */
-    return Arrays.asList(new RecommendResponse("1", 5));
+    return Arrays.asList(new IDValue("1", 5));
 
   }
 
