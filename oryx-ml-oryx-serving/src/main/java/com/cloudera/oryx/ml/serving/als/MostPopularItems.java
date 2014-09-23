@@ -16,58 +16,69 @@
 package com.cloudera.oryx.ml.serving.als;
 
 import java.util.List;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
+
+import com.carrotsearch.hppc.ObjectIntMap;
+import com.carrotsearch.hppc.cursors.ObjectIntCursor;
+import com.google.common.base.Function;
+import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Ordering;
+
+import com.cloudera.oryx.common.collection.Pair;
+import com.cloudera.oryx.common.collection.PairComparators;
+import com.cloudera.oryx.ml.serving.CSVMessageBodyWriter;
+import com.cloudera.oryx.ml.serving.IDCount;
+import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 
 import com.cloudera.oryx.ml.serving.ErrorResponse;
 
 /**
  * <p>Responds to a GET request to {@code /mostPopularItems(?howMany=n)(&offset=o)}
- * and in turn calls {link OryxRecommender#mostPopularItems(int)}.
- * {@code offset} is an offset into the entire list of results; {@code howMany} is the desired
- * number of results to return from there. For example, {@code offset=30} and {@code howMany=5}
- * will cause the implementation to retrieve 35 results internally and output the last 5.
- * If {@code howMany} is not specified, defaults to {link AbstractALSServlet#DEFAULT_HOW_MANY}.
- * {@code offset} defaults to 0.</p>
  *
- * <p>Output is as in {@link Recommend}.</p>
+ * <p>Results are items that the most users have interacted with, as item and count pairs.</p>
+ *
+ * <p>{@code howMany} and {@code offset} behavior are as in {@link Recommend}. Output
+ * is also the same, except that item IDs are returned with integer counts rather than
+ * scores.</p>
  */
 @Path("/mostPopularItems")
 public final class MostPopularItems extends AbstractALSResource {
 
   @GET
-  @Produces(MediaType.APPLICATION_JSON)
-  public Response getNoArgs() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "path /{userID} required")).build();
-  }
+  @Produces({CSVMessageBodyWriter.TEXT_CSV, MediaType.APPLICATION_JSON})
+  public List<IDCount> get(@DefaultValue("10") @QueryParam("howMany") int howMany,
+                           @DefaultValue("0") @QueryParam("offset") int offset) {
 
-  @GET
-  @Path("{userId}")
-  @Produces(MediaType.APPLICATION_JSON)
-  public Response get(@PathParam("userId") String userId,
-                      @QueryParam("howMany") int howMany,
-                      @QueryParam("offset") int offset,
-                      @QueryParam("considerKnownItems") boolean considerKnownItems,
-                      @QueryParam("rescorerParams") List<String> rescorerParams) {
-/*
-    OryxRecommender recommender = getRecommender();
-    RescorerProvider rescorerProvider = getRescorerProvider();
-    try {
-      Rescorer rescorer = rescorerProvider == null ? null :
-          rescorerProvider.getMostPopularItemsRescorer(recommender, getRescorerParams(request));
-      outputALSResult(request, response, recommender.mostPopularItems(getNumResultsToFetch(request), rescorer));
-    } catch (NotReadyException nre) {
-      response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, nre.toString());
-    } catch (IllegalArgumentException iae) {
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, iae.toString());
-    }
-  */
-    return Response.ok().entity("").build();
+    ALSServingModel model = getALSServingModel();
+    ObjectIntMap<String> itemCounts = model.getItemCounts();
+
+    Iterable<Pair<String,Integer>> countPairs =
+        Iterables.transform(itemCounts,
+            new Function<ObjectIntCursor<String>, Pair<String,Integer>>() {
+              @Override
+              public Pair<String,Integer> apply(ObjectIntCursor<String> input) {
+                return new Pair<>(input.key, input.value);
+              }
+            });
+
+    List<Pair<String,Integer>> allTopCountPairs =
+        Ordering.from(PairComparators.<Integer>bySecond()).greatestOf(countPairs, howMany + offset);
+    List<Pair<String,Integer>> topCountPairs =
+        selectedSublist(allTopCountPairs, howMany, offset);
+
+    return Lists.transform(topCountPairs,
+        new Function<Pair<String, Integer>, IDCount>() {
+          @Override
+          public IDCount apply(Pair<String,Integer> idCount) {
+            return new IDCount(idCount.getFirst(), idCount.getSecond());
+          }
+        });
   }
 
 }

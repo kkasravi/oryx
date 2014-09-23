@@ -15,17 +15,23 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import javax.servlet.ServletContext;
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
 import javax.ws.rs.core.GenericType;
+import javax.ws.rs.core.MediaType;
 
+import org.glassfish.jersey.client.ClientConfig;
+import org.glassfish.jersey.media.multipart.MultiPartFeature;
 import org.junit.Assert;
 
 import com.cloudera.oryx.lambda.KeyMessage;
 import com.cloudera.oryx.lambda.serving.AbstractServingTest;
 import com.cloudera.oryx.lambda.serving.ServingModelManager;
+import com.cloudera.oryx.ml.serving.IDCount;
 import com.cloudera.oryx.ml.serving.IDValue;
 import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 import com.cloudera.oryx.ml.serving.als.model.TestALSModelFactory;
@@ -34,6 +40,19 @@ public abstract class AbstractALSServingTest extends AbstractServingTest {
 
   protected static final GenericType<List<IDValue>> LIST_ID_VALUE_TYPE =
       new GenericType<List<IDValue>>() {};
+  protected static final GenericType<List<IDCount>> LIST_ID_COUNT_TYPE =
+      new GenericType<List<IDCount>>() {};
+
+  @Override
+  protected final List<String> getResourcePackages() {
+    return Arrays.asList("com.cloudera.oryx.ml.serving", "com.cloudera.oryx.ml.serving.als");
+  }
+
+  @Override
+  protected void configureClient(ClientConfig config) {
+    super.configureClient(config);
+    config.register(MultiPartFeature.class);
+  }
 
   @Override
   protected Class<? extends ServletContextListener> getInitListenerClass() {
@@ -43,9 +62,9 @@ public abstract class AbstractALSServingTest extends AbstractServingTest {
   public static class MockManagerInitListener implements ServletContextListener {
     @Override
     public final void contextInitialized(ServletContextEvent sce) {
-      sce.getServletContext().setAttribute(
-          AbstractALSResource.MODEL_MANAGER_KEY,
-          getModelManager());
+      ServletContext context = sce.getServletContext();
+      context.setAttribute(AbstractALSResource.MODEL_MANAGER_KEY, getModelManager());
+      context.setAttribute(AbstractALSResource.INPUT_PRODUCER_KEY, new MockQueueProducer());
     }
     protected MockServingModelManager getModelManager() {
       return new MockServingModelManager();
@@ -75,15 +94,88 @@ public abstract class AbstractALSServingTest extends AbstractServingTest {
     List<?> results = target(requestPath)
         .queryParam("howMany", Integer.toString(howMany))
         .queryParam("offset", Integer.toString(offset))
-        .request().get(LIST_ID_VALUE_TYPE);
+        .request()
+        .accept(MediaType.APPLICATION_JSON_TYPE)
+        .get(LIST_ID_VALUE_TYPE);
     Assert.assertEquals(expectedSize, results.size());
   }
 
   protected final void testHowMany(String requestPath, int howMany, int expectedSize) {
     List<?> results = target(requestPath)
-        .queryParam("howMany",Integer.toString(howMany))
-        .request().get(LIST_ID_VALUE_TYPE);
+        .queryParam("howMany", Integer.toString(howMany))
+        .request()
+        .accept(MediaType.APPLICATION_JSON_TYPE)
+        .get(LIST_ID_VALUE_TYPE);
     Assert.assertEquals(expectedSize, results.size());
+  }
+
+  protected static void testTopByValue(int expectedSize,
+                                       List<IDValue> values,
+                                       boolean reverse) {
+    Assert.assertEquals(expectedSize, values.size());
+    for (int i = 0; i < values.size(); i++) {
+      IDValue value = values.get(i);
+      double thisScore = value.getValue();
+      Assert.assertFalse(Double.isNaN(thisScore));
+      Assert.assertFalse(Double.isInfinite(thisScore));
+      if (i > 0) {
+        double lastScore = values.get(i-1).getValue();
+        if (reverse) {
+          Assert.assertTrue(lastScore <= thisScore);
+        } else {
+          Assert.assertTrue(lastScore >= thisScore);
+        }
+      }
+    }
+  }
+
+  protected static void testCSVTopByScore(int expectedSize, String response) {
+    testCSVTop(expectedSize, response, false, false);
+  }
+
+  protected static void testCSVLeastByScore(int expectedSize, String response) {
+    testCSVTop(expectedSize, response, false, true);
+  }
+
+  protected static void testCSVTopByCount(int expectedSize, String response) {
+    testCSVTop(expectedSize, response, true, false);
+  }
+
+  private static void testCSVTop(int expectedSize,
+                                 String response,
+                                 boolean counts,
+                                 boolean reverse) {
+    String[] rows = response.split("\n");
+    Assert.assertEquals(expectedSize, rows.length);
+    for (int i = 0; i < rows.length; i++) {
+      String row = rows[i];
+      String[] tokens = row.split(",");
+      if (counts) {
+        int count = Integer.parseInt(tokens[1]);
+        Assert.assertTrue(count > 0);
+      }
+      double thisScore = Double.parseDouble(tokens[1]);
+      Assert.assertFalse(Double.isNaN(thisScore));
+      Assert.assertFalse(Double.isInfinite(thisScore));
+      if (i > 0) {
+        double lastScore = Double.parseDouble(rows[i-1].split(",")[1]);
+        if (reverse) {
+          Assert.assertTrue(lastScore <= thisScore);
+        } else {
+          Assert.assertTrue(lastScore >= thisScore);
+        }
+      }
+    }
+  }
+
+  protected final void testCSVScores(int expectedSize, String response) {
+    String[] rows = response.split("\n");
+    Assert.assertEquals(expectedSize, rows.length);
+    for (String row : rows) {
+      double score = Double.parseDouble(row);
+      Assert.assertFalse(Double.isNaN(score));
+      Assert.assertFalse(Double.isInfinite(score));
+    }
   }
 
 }

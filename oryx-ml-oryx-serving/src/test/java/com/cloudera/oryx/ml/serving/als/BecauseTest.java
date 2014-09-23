@@ -16,7 +16,7 @@
 package com.cloudera.oryx.ml.serving.als;
 
 import java.util.List;
-import javax.ws.rs.BadRequestException;
+import javax.ws.rs.NotFoundException;
 import javax.ws.rs.core.MediaType;
 
 import org.junit.Assert;
@@ -27,19 +27,21 @@ import com.cloudera.oryx.ml.serving.IDValue;
 public final class BecauseTest extends AbstractALSServingTest {
 
   @Test
-  public void testBecauseRecommended() {
-    List<IDValue> recs = target("because").path("U0/I0").request()
+  public void testBecause() {
+    List<IDValue> recs = target("/because/U0/I0").request()
         .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_ID_VALUE_TYPE);
-    Assert.assertEquals(3, recs.size());
-    for (int i = 1; i < recs.size(); i++) {
-      Assert.assertTrue(recs.get(i).getValue() <= recs.get(i-1).getValue());
-    }
+    testTopByValue(3, recs, false);
     Assert.assertEquals("I0", recs.get(0).getID());
     Assert.assertEquals(1.0, recs.get(0).getValue(), DOUBLE_EPSILON);
-
   }
 
-  @Test(expected = BadRequestException.class)
+  @Test
+  public void testBecauseCSV() {
+    String response = target("/because/U0/I0").request().get(String.class);
+    testCSVTopByScore(3, response);
+  }
+
+  @Test(expected = NotFoundException.class)
   public void testNoArg() {
     target("/because").request().get(String.class);
   }

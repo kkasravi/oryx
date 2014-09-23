@@ -15,28 +15,33 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
+import java.util.Arrays;
 import java.util.List;
 import javax.ws.rs.core.MediaType;
 
 import org.junit.Assert;
 import org.junit.Test;
 
-public final class AllItemIDsTest extends AbstractALSServingTest {
+public final class KnownItemsTest extends AbstractALSServingTest {
 
   @Test
-  public void testAllItemIDs() {
-    List<String> items = target("/item/allIDs").request()
+  public void testKnownItems() {
+    List<String> items = target("/knownItems/U1").request()
         .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_STRING_TYPE);
-    Assert.assertEquals(9, items.size());
-    for (int item = 0; item < 9; item++) {
-      Assert.assertTrue(items.contains("I" + item));
+    Assert.assertEquals(5, items.size());
+    for (int i : new int[] {1, 4, 5, 7, 8}) {
+      Assert.assertTrue(items.contains("I" + i));
     }
   }
 
   @Test
-  public void testAllItemIDsCSV() {
-    String response = target("/item/allIDs").request().get(String.class);
-    Assert.assertEquals(9, response.split("\n").length);
+  public void testKnownItemsCSV() {
+    String response = target("/knownItems/U1").request().get(String.class);
+    List<String> items = Arrays.asList(response.split("\n"));
+    Assert.assertEquals(5, items.size());
+    for (int i : new int[] {1, 4, 5, 7, 8}) {
+      Assert.assertTrue(items.contains("I" + i));
+    }
   }
 
 }

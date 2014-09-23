@@ -15,29 +15,41 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
 
-import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.carrotsearch.hppc.ObjectSet;
+import com.carrotsearch.hppc.cursors.ObjectCursor;
 
 import com.cloudera.oryx.ml.serving.CSVMessageBodyWriter;
 
 /**
- * <p>Responds to a GET request to {@code /item/allIDs}.</p>
+ * <p>Responds to a GET request to {@code /knownItems/[userID]}.</p>
  *
  * <p>CSV output consists of one ID per line. JSON output is an array of item IDs.</p>
  */
-@Path("/item")
-public final class AllItemIDs extends AbstractALSResource {
+@Path("/knownItems")
+public final class KnownItems extends AbstractALSResource {
 
   @GET
-  @Path("/allIDs")
+  @Path("{userID}")
   @Produces({CSVMessageBodyWriter.TEXT_CSV, MediaType.APPLICATION_JSON})
-  public Collection<String> get() {
-    return getALSServingModel().getAllItemIDs();
+  public Collection<String> get(@PathParam("userID") String userID) {
+    ObjectSet<String> knownItems = getALSServingModel().getKnownItems(userID);
+    Collection<String> itemIDs = new ArrayList<>();
+    if (knownItems != null) {
+      synchronized (knownItems) {
+        for (ObjectCursor<String> itemID : knownItems) {
+          itemIDs.add(itemID.value);
+        }
+      }
+    }
+    return itemIDs;
   }
+
 }

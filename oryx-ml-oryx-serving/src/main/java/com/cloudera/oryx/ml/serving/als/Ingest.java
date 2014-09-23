@@ -15,96 +15,126 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.Collection;
-import javax.servlet.ServletException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipInputStream;
+import javax.annotation.PostConstruct;
+import javax.servlet.ServletContext;
 import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.Part;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
-import javax.ws.rs.Produces;
 import javax.ws.rs.core.Context;
-import javax.ws.rs.core.HttpHeaders;
 import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.Response;
 
-import com.google.common.base.Charsets;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.apache.commons.fileupload.FileItem;
+import org.apache.commons.fileupload.FileUploadException;
+import org.apache.commons.fileupload.disk.DiskFileItemFactory;
+import org.apache.commons.fileupload.servlet.FileCleanerCleanup;
+import org.apache.commons.fileupload.servlet.ServletFileUpload;
 
-import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
+import com.cloudera.oryx.lambda.QueueProducer;
+import com.cloudera.oryx.ml.serving.CSVMessageBodyWriter;
+import com.cloudera.oryx.ml.serving.OryxServingException;
 
 /**
- * <p>Responds to a POST request to {@code /ingest} and in turn calls
- * {link ALSServingModel#ingest(Reader)}}. The content of the request body is
- * fed to this method. Note that the content may be gzipped; if so, header "Content-Encoding"
- * must have value "gzip" or "x-gzip".</p>
+ * <p>Responds to a POST to {@code /ingest}. The content of the request are interpreted as
+ * lines of text and are submitted to the input Kafka queue as-is.</p>
  *
- * <p>Alternatively, CSV data may be POSTed here as if part of a web browser file upload. In this case
- * the "Content-Type" should be "multipart/form-data", and the payload encoded accordingly. The uploaded
- * file may be gzipped or zipped.</p>
+ * <p>The body may be compressed with {@code gzip} or {@code deflate} {@code Content-Encoding}.
+ * It may also by {@code multipart/form-data} encoded, and each part may be compressed with
+ * {@code Content-Type} {@code application/zip}, {@code application/gzip}, or
+ * {@code application/x-gzip}.</p>
+ *
+ * <p>In all events the uncompressed data should be text, encoding with UTF-8, and with
+ * {@code \n} line separators.</p>
  */
 @Path("/ingest")
 public final class Ingest extends AbstractALSResource {
 
-  private static final Logger log = LoggerFactory.getLogger(Ingest.class);
+  private DiskFileItemFactory fileItemFactory;
 
-  @Context
-  private HttpServletRequest httpServletRequest;
-
-  @Context
-  private HttpHeaders httpHeaders;
+  @Override
+  @PostConstruct
+  public void init() {
+    super.init();
+    ServletContext context = getServletContext();
+    fileItemFactory = new DiskFileItemFactory(
+        1 << 16, (File) context.getAttribute("javax.servlet.context.tempdir"));
+    fileItemFactory.setFileCleaningTracker(FileCleanerCleanup.getFileCleaningTracker(context));
+  }
 
   @POST
-  @Produces(MediaType.APPLICATION_JSON)
-  @Consumes({MediaType.MULTIPART_FORM_DATA, MediaType.TEXT_PLAIN})
-  public Response post() {
-    ALSServingModel alsServingModel = getALSServingModel();
-    String contentType = httpServletRequest.getContentType();
-    boolean fromBrowserUpload = contentType != null && contentType.startsWith(MediaType.MULTIPART_FORM_DATA);
-
-    Reader reader;
-    try {
-      if (fromBrowserUpload) {
-        Collection<Part> parts = httpServletRequest.getParts();
-        if (parts == null || parts.isEmpty()) {
-          return Response.status(Response.Status.BAD_REQUEST).entity("No Form Data").build();
-        }
-
-        Part part = parts.iterator().next();
-        InputStream in = part.getInputStream();
-        reader = new InputStreamReader(in, Charsets.UTF_8);
-      } else {
-        String contentEncoding = httpServletRequest.getHeader(HttpHeaders.CONTENT_ENCODING);
-        if (contentEncoding == null) {
-          reader = httpServletRequest.getReader();
-        }
-      }
-    } catch (ServletException | IOException ex) {
-      return Response.status(Response.Status.BAD_REQUEST).entity(ex.getMessage()).build();
-    }
-
-//    try {
-//      alsServingModel.ingest(reader);
-//    } catch (IllegalArgumentException | NoSuchElementException ex) {
-//      return Response.status(Response.Status.BAD_REQUEST).entity(ex.toString()).build();
-//    }
-
-    String referrer = httpHeaders.getRequestHeader("referer").get(0);
-    if (fromBrowserUpload && referrer != null) {
-      // Parsing avoids response splitting
-      try {
-        return Response.created(new URI(referrer)).build();
-      } catch (URISyntaxException e) {
-        log.error("Unable to read referring URI: {}", referrer);
-      }
-    }
-    return Response.ok().entity("").build();
+  @Consumes({MediaType.TEXT_PLAIN, MediaType.APPLICATION_JSON, CSVMessageBodyWriter.TEXT_CSV})
+  public void post(Reader reader) throws IOException {
+    doPost(reader instanceof BufferedReader ? (BufferedReader) reader : new BufferedReader(reader));
   }
+
+  @POST
+  @Consumes(MediaType.MULTIPART_FORM_DATA)
+  public void post(@Context HttpServletRequest request)
+      throws IOException, FileUploadException, OryxServingException {
+    // JAX-RS does not by itself support multipart form data yet, so doing it manually.
+    // We'd use Servlet 3.0 but the Grizzly test harness doesn't let us test it :(
+    // Good old Commons FileUpload it is:
+    List<FileItem> fileItems = new ServletFileUpload(fileItemFactory).parseRequest(request);
+    check(!fileItems.isEmpty(), "No parts");
+    for (FileItem item : fileItems) {
+      InputStream in = maybeDecompress(item.getContentType(), item.getInputStream());
+      doPost(new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8)));
+    }
+  }
+
+  private void doPost(BufferedReader buffered) throws IOException {
+    QueueProducer<?,String> inputQueue = getInputProducer();
+    String line;
+    while ((line = buffered.readLine()) != null) {
+      inputQueue.send(line);
+    }
+  }
+
+  private static InputStream maybeDecompress(String contentType,
+                                             InputStream in) throws IOException {
+    if (contentType != null) {
+      switch (contentType) {
+        case "application/zip":
+          in = new ZipInputStream(in);
+          break;
+        case "application/gzip":
+        case "application/x-gzip":
+          in = new GZIPInputStream(in);
+          break;
+      }
+    }
+    return in;
+  }
+
+  /*
+  @POST
+  @Consumes(MediaType.MULTIPART_FORM_DATA)
+  public void post(@Context HttpServletRequest request)
+      throws IOException, ServletException, OryxServingException {
+    // JAX-RS does not by itself support multipart form data yet, so doing it manually:
+    Collection<Part> parts = request.getParts();
+    boolean anyValidPart = false;
+    if (parts != null) {
+      for (Part part : parts) {
+        String partContentType = part.getContentType();
+        if (INGEST_TYPES.contains(partContentType)) {
+          anyValidPart = true;
+          doPost(new BufferedReader(new InputStreamReader(part.getInputStream(), StandardCharsets.UTF_8)));
+        }
+      }
+    }
+    check(anyValidPart, "No Part with supported Content-Type");
+  }
+   */
+
 }

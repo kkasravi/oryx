@@ -15,25 +15,19 @@
 
 package com.cloudera.oryx.lambda.serving;
 
-import java.util.Collection;
 import java.util.List;
 import javax.servlet.ServletContextListener;
-import javax.ws.rs.core.Application;
 import javax.ws.rs.core.GenericType;
 
-import com.google.common.base.Preconditions;
-import org.glassfish.jersey.message.DeflateEncoder;
-import org.glassfish.jersey.message.GZipEncoder;
-import org.glassfish.jersey.server.ResourceConfig;
-import org.glassfish.jersey.server.filter.EncodingFilter;
+import com.google.common.base.Joiner;
 import org.glassfish.jersey.test.DeploymentContext;
 import org.glassfish.jersey.test.JerseyTest;
 import org.glassfish.jersey.test.ServletDeploymentContext;
+import org.glassfish.jersey.test.TestProperties;
 import org.glassfish.jersey.test.grizzly.GrizzlyWebTestContainerFactory;
 import org.glassfish.jersey.test.spi.TestContainerFactory;
 import org.junit.Before;
 
-import com.cloudera.oryx.common.lang.ClassUtils;
 import com.cloudera.oryx.common.random.RandomManager;
 
 public abstract class AbstractServingTest extends JerseyTest {
@@ -41,8 +35,8 @@ public abstract class AbstractServingTest extends JerseyTest {
   protected static final float FLOAT_EPSILON = 1.0e-6f;
   protected static final double DOUBLE_EPSILON = 1.0e-12;
 
-  protected static final GenericType<Collection<String>> COLLECTION_STRING_TYPE =
-      new GenericType<Collection<String>>() {};
+  protected static final GenericType<List<String>> LIST_STRING_TYPE =
+      new GenericType<List<String>>() {};
   protected static final GenericType<List<Double>> LIST_DOUBLE_TYPE =
       new GenericType<List<Double>>() {};
 
@@ -56,32 +50,23 @@ public abstract class AbstractServingTest extends JerseyTest {
     return new GrizzlyWebTestContainerFactory();
   }
 
+  protected void configureProperties() {
+    enable(TestProperties.LOG_TRAFFIC);
+    enable(TestProperties.DUMP_ENTITY);
+  }
+
   @Override
   protected final DeploymentContext configureDeployment() {
-    return ServletDeploymentContext.builder(configure())
-        .initParam("jersey.config.server.provider.packages", getResourceClass().getPackage().getName())
+    configureProperties();
+    String joinedPackages = Joiner.on(',').join(getResourcePackages());
+    return ServletDeploymentContext.builder(OryxApplication.class)
+        .initParam("javax.ws.rs.Application", OryxApplication.class.getName())
+        .contextParam(OryxApplication.class.getName() + ".packages", joinedPackages)
         .addListener(getInitListenerClass())
         .build();
   }
 
-  @Override
-  protected final Application configure() {
-    //enable(TestProperties.LOG_TRAFFIC);
-    //enable(TestProperties.DUMP_ENTITY);
-    return new ResourceConfig(
-        getResourceClass(),
-        EncodingFilter.class,
-        GZipEncoder.class,
-        DeflateEncoder.class);
-  }
-
-  protected Class<?> getResourceClass() {
-    // By default, guess resource class from test class name
-    String testClassName = this.getClass().getName();
-    Preconditions.checkState(testClassName.endsWith("Test"));
-    String resourceClassName = testClassName.substring(0, testClassName.length() - 4);
-    return ClassUtils.loadClass(resourceClassName);
-  }
+  protected abstract List<String> getResourcePackages();
 
   protected abstract Class<? extends ServletContextListener> getInitListenerClass();
 

@@ -15,13 +15,15 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import javax.annotation.PostConstruct;
 import javax.servlet.ServletContext;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.Response;
+
+import com.google.common.base.Function;
+import com.google.common.collect.Lists;
 
 import com.cloudera.oryx.common.collection.Pair;
 import com.cloudera.oryx.lambda.QueueProducer;
@@ -44,47 +46,61 @@ public abstract class AbstractALSResource {
 
   @SuppressWarnings("unchecked")
   @PostConstruct
-  public final void init() {
+  public void init() {
     ServingModelManager<?> servingModelManager = (ServingModelManager<?>)
         servletContext.getAttribute(MODEL_MANAGER_KEY);
     alsServingModel = (ALSServingModel) servingModelManager.getModel();
     inputProducer = (QueueProducer<String,String>) servletContext.getAttribute(INPUT_PRODUCER_KEY);
   }
 
+  protected final ServletContext getServletContext() {
+    return servletContext;
+  }
+
   protected final ALSServingModel getALSServingModel() {
     return alsServingModel;
   }
 
-  protected final QueueProducer<String,String> getInputProducer() {
+  protected final QueueProducer<?,String> getInputProducer() {
     return inputProducer;
   }
 
-  protected final void check(boolean condition,
-                             Response.Status status,
-                             String errorMessage) throws OryxServingException {
+  protected static void check(boolean condition,
+                              Response.Status status,
+                              String errorMessage) throws OryxServingException {
     if (!condition) {
       throw new OryxServingException(status, errorMessage);
     }
   }
 
-  protected final void check(boolean condition,
-                             String errorMessage) throws OryxServingException {
+  protected static void check(boolean condition,
+                              String errorMessage) throws OryxServingException {
     check(condition, Response.Status.BAD_REQUEST, errorMessage);
+  }
+
+  protected static void checkExists(boolean condition,
+                                    String entity) throws OryxServingException {
+    check(condition, Response.Status.NOT_FOUND, entity);
+  }
+
+  protected static <T> List<T> selectedSublist(List<T> values, int howMany, int offset) {
+    if (values.size() < offset) {
+      return Collections.emptyList();
+    }
+    return values.subList(offset, Math.min(offset + howMany, values.size()));
   }
 
   protected static List<IDValue> toIDValueResponse(List<Pair<String,Double>> pairs,
                                                    int howMany,
                                                    int offset) {
-    if (pairs.size() < offset) {
-      return Collections.emptyList();
-    }
-    int end = Math.min(offset + howMany, pairs.size());
-    List<IDValue> response = new ArrayList<>(end - offset);
-    for (int i = offset; i < end; i++) {
-      Pair<String,Double> idDot = pairs.get(i);
-      response.add(new IDValue(idDot.getFirst(), idDot.getSecond()));
-    }
-    return response;
+    List<Pair<String,Double>> sublist = selectedSublist(pairs, howMany, offset);
+    return Lists.transform(sublist,
+        new Function<Pair<String,Double>,IDValue>() {
+          @Override
+          public IDValue apply(Pair<String,Double> idDot) {
+            return new IDValue(idDot.getFirst(), idDot.getSecond());
+          }
+        });
   }
 
 }

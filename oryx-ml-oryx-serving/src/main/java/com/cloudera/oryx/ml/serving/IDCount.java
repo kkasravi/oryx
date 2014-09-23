@@ -15,36 +15,44 @@
 
 package com.cloudera.oryx.ml.serving;
 
-import javax.ws.rs.core.Response;
+public final class IDCount implements HasCSV {
 
-/**
- * JSON Error for missing path params, incorrect query params, etc
- */
-public final class ErrorResponse {
+  private String id;
+  private int count;
 
-  private final String error;
-  private final Response.Status statusCode;
-
-  public ErrorResponse(Response.Status statusCode) {
-    this(statusCode, null);
+  public IDCount() {
+    this(null, 0);
   }
 
-  public ErrorResponse(Response.Status statusCode, String error) {
-    this.statusCode = statusCode;
-    this.error = error;
+  public IDCount(String id, int count) {
+    this.id = id;
+    this.count = count;
   }
 
-  public String getError() {
-    return error;
+  public String getID() {
+    return id;
   }
 
-  public Response.Status getStatusCode() {
-    return statusCode;
+  public void setID(String id) {
+    this.id = id;
+  }
+
+  public int getValue() {
+    return count;
+  }
+
+  public void setValue(int count) {
+    this.count = count;
   }
 
   @Override
   public String toString() {
-    return statusCode + (error == null ? "" : ": " + error);
+    return id + ":" + count;
+  }
+
+  @Override
+  public String toCSV() {
+    return id + "," + count;
   }
 
 }

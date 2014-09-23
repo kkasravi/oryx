@@ -13,27 +13,13 @@
  * License.
  */
 
-package com.cloudera.oryx.common.io;
-
-import java.io.Closeable;
-
-import com.google.common.base.Preconditions;
+package com.cloudera.oryx.ml.serving.als;
 
 /**
- * Simply closes a {@link Closeable}.
+ * Simple interface for a function from Object to {@code double}.
  */
-public final class ClosingRunnable implements Runnable {
+public interface DoubleFunction<T> {
 
-  private final Closeable closeable;
-
-  public ClosingRunnable(Closeable closeable) {
-    Preconditions.checkNotNull(closeable);
-    this.closeable = closeable;
-  }
-
-  @Override
-  public void run() {
-    IOUtils.closeQuietly(closeable);
-  }
+  double apply(T t);
 
 }

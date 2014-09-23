@@ -25,8 +25,12 @@ import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
+import com.carrotsearch.hppc.ObjectOpenHashSet;
+import com.carrotsearch.hppc.ObjectSet;
+import com.google.common.base.Predicate;
+
 import com.cloudera.oryx.common.collection.Pair;
-import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.cloudera.oryx.ml.serving.CSVMessageBodyWriter;
 import com.cloudera.oryx.ml.serving.IDValue;
 import com.cloudera.oryx.ml.serving.OryxServingException;
 import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
@@ -48,24 +52,20 @@ import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
  * eligible to be returned as recommendations. It defaults to {@code false}, meaning that these
  * previously interacted-with items are not returned in recommendations.</p>
  *
- * <p>If the user is not known to the model, an HTTP 404 Not Found response is generated.</p>
+ * <p>If the user is not known to the model, a {@link Response.Status#NOT_FOUND}
+ * response is generated.</p>
  *
- * <p>Default output is JSON format, an array of recommendations, each of which has an
- * "id" and "value" entry, like [{"id":"I2","value":0.141348009071816},...]</p>
+ * <p>Default output is CSV format, containing {@code id,value} per line.
+ * JSON format can also be selected by an appropriate {@code Accept} header. It returns
+ * an array of recommendations, each of which has an "id" and "value" entry, like
+ * [{"id":"I2","value":0.141348009071816},...]</p>
  */
 @Path("/recommend")
 public final class Recommend extends AbstractALSResource {
 
   @GET
-  @Produces(MediaType.APPLICATION_JSON)
-  public Response get() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(
-        new ErrorResponse(Response.Status.BAD_REQUEST, "User ID required")).build();
-  }
-
-  @GET
   @Path("{userID}")
-  @Produces(MediaType.APPLICATION_JSON)
+  @Produces({CSVMessageBodyWriter.TEXT_CSV, MediaType.APPLICATION_JSON})
   public List<IDValue> get(
       @PathParam("userID") String userID,
       @DefaultValue("10") @QueryParam("howMany") int howMany,
@@ -77,10 +77,23 @@ public final class Recommend extends AbstractALSResource {
     check(offset >= 0, "offset must be nonnegative");
 
     ALSServingModel model = getALSServingModel();
-    List<Pair<String,Double>> topIDDots =
-        model.topDotWithUserVector(userID, howMany + offset, considerKnownItems);
-    check(topIDDots != null, Response.Status.NOT_FOUND, userID);
+    float[] userVector = model.getUserVector(userID);
+    checkExists(userVector != null, userID);
 
+    Predicate<String> allowedFn = null;
+    if (!considerKnownItems) {
+      ObjectSet<String> knownItems = model.getKnownItems(userID);
+      if (knownItems != null && !knownItems.isEmpty()) {
+        synchronized (knownItems) {
+          allowedFn = new NotKnownPredicate(new ObjectOpenHashSet<>(knownItems));
+        }
+      }
+    }
+
+    List<Pair<String,Double>> topIDDots = model.topN(
+        new DotsFunction(userVector),
+        howMany + offset,
+        allowedFn);
     return toIDValueResponse(topIDDots, howMany, offset);
   }
 

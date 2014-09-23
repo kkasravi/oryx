@@ -13,27 +13,26 @@
  * License.
  */
 
-package com.cloudera.oryx.common.io;
+package com.cloudera.oryx.ml.serving.als;
 
-import java.io.Closeable;
+import com.carrotsearch.hppc.ObjectSet;
+import com.google.common.base.Predicate;
 
-import com.google.common.base.Preconditions;
+final class NotKnownPredicate implements Predicate<String> {
 
-/**
- * Simply closes a {@link Closeable}.
- */
-public final class ClosingRunnable implements Runnable {
+  private final ObjectSet<String> knownItemsForUser;
 
-  private final Closeable closeable;
-
-  public ClosingRunnable(Closeable closeable) {
-    Preconditions.checkNotNull(closeable);
-    this.closeable = closeable;
+  /**
+   * @param knownItemsForUser items which are already known to the user. The object should
+   *  be safely accessible without synchronization.
+   */
+  NotKnownPredicate(ObjectSet<String> knownItemsForUser) {
+    this.knownItemsForUser = knownItemsForUser;
   }
 
   @Override
-  public void run() {
-    IOUtils.closeQuietly(closeable);
+  public boolean apply(String input) {
+    return !knownItemsForUser.contains(input);
   }
 
 }

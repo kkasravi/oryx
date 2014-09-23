@@ -13,27 +13,10 @@
  * License.
  */
 
-package com.cloudera.oryx.common.io;
+package com.cloudera.oryx.ml.serving;
 
-import java.io.Closeable;
+public interface HasCSV {
 
-import com.google.common.base.Preconditions;
-
-/**
- * Simply closes a {@link Closeable}.
- */
-public final class ClosingRunnable implements Runnable {
-
-  private final Closeable closeable;
-
-  public ClosingRunnable(Closeable closeable) {
-    Preconditions.checkNotNull(closeable);
-    this.closeable = closeable;
-  }
-
-  @Override
-  public void run() {
-    IOUtils.closeQuietly(closeable);
-  }
+  String toCSV();
 
 }

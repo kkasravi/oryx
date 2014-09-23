@@ -25,57 +25,56 @@ import org.junit.Test;
 
 import com.cloudera.oryx.ml.serving.IDValue;
 
-public final class RecommendTest extends AbstractALSServingTest {
+public class RecommendToManyTest extends AbstractALSServingTest {
 
   @Test
-  public void testRecommend() {
-    List<IDValue> recs = target("/recommend/U0").request()
+  public void testRecommendToMany() {
+    List<IDValue> recs = target("/recommendToMany/U0/U2").request()
         .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_ID_VALUE_TYPE);
-    testTopByValue(6, recs, false);
+    testTopByValue(2, recs, false);
     Assert.assertEquals("I1", recs.get(0).getID());
-    Assert.assertEquals(0.465396924146558, recs.get(0).getValue(), FLOAT_EPSILON);
+    Assert.assertEquals(0.3434463501376608, recs.get(0).getValue(), FLOAT_EPSILON);
   }
 
-  @Test
-  public void testRecommendCSV() {
-    String response = target("/recommend/U0").request().get(String.class);
-    testCSVTopByScore(6, response);
+  @Test(expected = NotFoundException.class)
+  public void testNoArg() {
+    target("/recommendToMany").request().get(String.class);
   }
 
   @Test
   public void testHowMany() {
-    testHowMany("/recommend/U5", 10, 2);
-    testHowMany("/recommend/U5", 2, 2);
-    testHowMany("/recommend/U5", 1, 1);
+    testHowMany("/recommendToMany/U2/U5", 10, 2);
+    testHowMany("/recommendToMany/U5", 2, 2);
+    testHowMany("/recommendToMany/U2", 1, 1);
   }
 
   @Test(expected = BadRequestException.class)
   public void testBadHowMany() {
-    testHowMany("/recommend/U5", -1, 0);
+    testHowMany("/recommendToMany/U5", -1, 0);
   }
 
   @Test
   public void testOffset() {
-    testOffset("/recommend/U6", 2, 1, 2);
-    testOffset("/recommend/U6", 3, 1, 2);
-    testOffset("/recommend/U6", 1, 1, 1);
-    testOffset("/recommend/U6", 3, 3, 0);
+    testOffset("/recommendToMany/U0/U6", 5, 0, 1);
+    testOffset("/recommendToMany/U0/U6", 3, 0, 1);
+    testOffset("/recommendToMany/U6", 1, 1, 1);
+    testOffset("/recommendToMany/U6", 3, 3, 0);
   }
 
   @Test(expected = BadRequestException.class)
   public void testBadOffset() {
-    testOffset("/recommend/U6", 3, -1, 0);
+    testOffset("/recommendToMany/U6", 3, -1, 0);
   }
 
   @Test
   public void testConsiderKnownItems() {
-    List<IDValue> normal = target("/recommend/U4").request()
+    List<IDValue> normal = target("/recommendToMany/U4").request()
         .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_ID_VALUE_TYPE);
     Assert.assertEquals(3, normal.size());
     Assert.assertEquals("I2", normal.get(0).getID());
     Assert.assertEquals(0.141347957620267, normal.get(0).getValue(), FLOAT_EPSILON);
 
-    List<IDValue> withConsider = target("/recommend/U4")
+    List<IDValue> withConsider = target("/recommendToMany/U4")
         .queryParam("considerKnownItems", "true").request()
         .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_ID_VALUE_TYPE);
     Assert.assertEquals(9, withConsider.size());
@@ -83,9 +82,10 @@ public final class RecommendTest extends AbstractALSServingTest {
     Assert.assertEquals(2.00474569593095, withConsider.get(0).getValue(), FLOAT_EPSILON);
   }
 
-  @Test(expected = NotFoundException.class)
-  public void testNoArg() {
-    target("/recommend").request().get(String.class);
+  @Test
+  public void testRecommendToManyCSV() {
+    String response = target("/recommendToMany/U0/U2").request().get(String.class);
+    testCSVTopByScore(2, response);
   }
 
 }

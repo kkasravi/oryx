@@ -15,28 +15,33 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
+import java.util.ArrayList;
 import java.util.List;
-import javax.ws.rs.core.MediaType;
 
-import org.junit.Assert;
-import org.junit.Test;
+import com.cloudera.oryx.common.collection.Pair;
+import com.cloudera.oryx.lambda.QueueProducer;
 
-public final class AllItemIDsTest extends AbstractALSServingTest {
+public final class MockQueueProducer implements QueueProducer<String,String> {
 
-  @Test
-  public void testAllItemIDs() {
-    List<String> items = target("/item/allIDs").request()
-        .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_STRING_TYPE);
-    Assert.assertEquals(9, items.size());
-    for (int item = 0; item < 9; item++) {
-      Assert.assertTrue(items.contains("I" + item));
-    }
+  private static final List<Pair<String,String>> DATA = new ArrayList<>();
+
+  public static List<Pair<String,String>> getData() {
+    return DATA;
   }
 
-  @Test
-  public void testAllItemIDsCSV() {
-    String response = target("/item/allIDs").request().get(String.class);
-    Assert.assertEquals(9, response.split("\n").length);
+  @Override
+  public void send(String key, String message) {
+    DATA.add(new Pair<>(key, message));
+  }
+
+  @Override
+  public void send(String message) {
+    send(null, message);
+  }
+
+  @Override
+  public void close() {
+    // do nothing
   }
 
 }

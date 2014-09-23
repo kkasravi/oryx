@@ -16,32 +16,27 @@
 package com.cloudera.oryx.ml.serving.als;
 
 import java.util.List;
-import javax.ws.rs.NotFoundException;
 import javax.ws.rs.core.MediaType;
 
 import org.junit.Assert;
 import org.junit.Test;
 
-public final class SimilarityToItemTest extends AbstractALSServingTest {
-
-  @Test(expected = NotFoundException.class)
-  public void testNoArg() {
-    target("/similarityToItem").request().get(String.class);
-  }
+public final class PopularRepresentativeItemsTest extends AbstractALSServingTest {
 
   @Test
-  public void testSimilarityToItem() {
-    List<Double> items = target("/similarityToItem/I0/I1/I2").request()
-        .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_DOUBLE_TYPE);
+  public void testPopularRepresentativeItems() {
+    List<String> items = target("/popularRepresentativeItems").request()
+        .accept(MediaType.APPLICATION_JSON_TYPE).get(LIST_STRING_TYPE);
     Assert.assertEquals(2, items.size());
-    Assert.assertEquals(0.9042602737279073, items.get(0), FLOAT_EPSILON);
-    Assert.assertEquals(-0.26486863115406456, items.get(1), FLOAT_EPSILON);
+    // These are tied in the current model:
+    Assert.assertTrue("I0".equals(items.get(0)) || "I3".equals(items.get(0)));
+    Assert.assertEquals("I4", items.get(1));
   }
 
   @Test
-  public void testSimilarityToItemCSV() {
-    String response = target("/similarityToItem/I0/I1/I2").request().get(String.class);
-    testCSVScores(2, response);
+  public void testPopularRepresentativeItemsCSV() {
+    String response = target("/popularRepresentativeItems").request().get(String.class);
+    Assert.assertEquals(2, response.split("\n").length);
   }
 
 }

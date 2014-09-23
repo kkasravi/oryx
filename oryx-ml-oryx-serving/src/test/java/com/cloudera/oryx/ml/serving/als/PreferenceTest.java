@@ -15,26 +15,68 @@
 
 package com.cloudera.oryx.ml.serving.als;
 
+import java.util.List;
 import javax.ws.rs.client.Entity;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
+
+import com.cloudera.oryx.common.collection.Pair;
+import com.cloudera.oryx.ml.serving.CSVMessageBodyWriter;
 
 public final class PreferenceTest extends AbstractALSServingTest {
 
-  @Test
-  public void testPost() {
-    Response response = target("pref").path("U1").path("I2").request()
-        .accept(MediaType.APPLICATION_JSON_TYPE).post(Entity.text("1"));
-    Assert.assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+  private static final String PREFERENCE_DATA = "2.5\n";
+
+  @Before
+  public void clearProducerData() {
+    MockQueueProducer.getData().clear();
   }
 
   @Test
-  public void testDelete() {
-    Response response = target("pref").path("U1").path("I2").request()
-        .accept(MediaType.APPLICATION_JSON_TYPE).delete();
-    Assert.assertEquals(Response.Status.OK.getStatusCode(), response.getStatus());
+  public void testPostJson() {
+    Response response = target("/pref/U1/I1").request()
+        .post(Entity.entity(PREFERENCE_DATA, MediaType.APPLICATION_JSON));
+    checkResponse(response, "U1,I1,2.5");
   }
+
+  @Test
+  public void testPostWithEmptyItemValue() {
+    Response response = target("/pref/U2/I2").request().post(Entity.text(""));
+    checkResponse(response, "U2,I2,1.0");
+  }
+
+  @Test
+  public void testPostWithBadItemValue() {
+    Response response = target("/pref/U2/I2").request().post(Entity.text("aBc!"));
+    Assert.assertEquals(Response.Status.BAD_REQUEST.getStatusCode(), response.getStatus());
+  }
+
+  @Test
+  public void testPostCSV() {
+    Response response = target("/pref/U1/I1").request()
+        .post(Entity.entity(PREFERENCE_DATA, CSVMessageBodyWriter.TEXT_CSV_TYPE));
+    checkResponse(response, "U1,I1,2.5");
+  }
+
+  // Disabled until supported in the model build
+  /*
+  @Test
+  public void testDelete() {
+    Response response = target("/pref/U1/I2").request().delete();
+    checkResponse(response, "U1,I2");
+  }
+   */
+
+  private static void checkResponse(Response response, String expectedOutput) {
+    Assert.assertEquals(Response.Status.NO_CONTENT.getStatusCode(), response.getStatus());
+    List<Pair<String,String>> data = MockQueueProducer.getData();
+    Assert.assertEquals(1, data.size());
+    Assert.assertNull(data.get(0).getFirst());
+    Assert.assertEquals(expectedOutput, data.get(0).getSecond());
+  }
+
 }

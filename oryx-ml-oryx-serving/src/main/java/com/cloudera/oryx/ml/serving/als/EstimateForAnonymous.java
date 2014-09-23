@@ -24,9 +24,13 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.PathSegment;
 import javax.ws.rs.core.Response;
 
+import com.google.common.base.Function;
+import com.google.common.collect.Lists;
+
 import com.cloudera.oryx.common.collection.Pair;
 import com.cloudera.oryx.common.math.VectorMath;
-import com.cloudera.oryx.ml.serving.ErrorResponse;
+import com.cloudera.oryx.ml.serving.CSVMessageBodyWriter;
+import com.cloudera.oryx.ml.serving.OryxServingException;
 import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 
 /**
@@ -35,8 +39,7 @@ import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
  * That is, 1 or more item IDs are supplied, which may each optionally correspond to
  * a value or else default to 1.</p>
  *
- * <p>Unknown item IDs are ignored, unless all are unknown, in which case a
- * {link HttpServletResponse#SC_BAD_REQUEST} status is returned.</p>
+ * <p>Unknown item IDs are ignored.</p>
  *
  * <p>Outputs the result of the method call as a value on one line.</p>
  */
@@ -44,54 +47,51 @@ import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
 public final class EstimateForAnonymous extends AbstractALSResource {
 
   @GET
-  @Produces(MediaType.APPLICATION_JSON)
-  public Response getNoArgs() {
-    return Response.status(Response.Status.BAD_REQUEST).entity(new ErrorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "path /{toItemID}/{itemId}+ required")).build();
-  }
-
-  @GET
-  @Produces(MediaType.APPLICATION_JSON)
   @Path("{toItemID}/{itemID : .+}")
-  public Double get(@PathParam("toItemID") String toItemID,
-                    @PathParam("itemID") List<PathSegment> pathSegmentList) {
-    Pair<String[],double[]> itemValuePairs = parseItemValuePairs(pathSegmentList);
-    String[] itemIDs = itemValuePairs.getFirst();
-    double[] values = itemValuePairs.getSecond();
+  @Produces({CSVMessageBodyWriter.TEXT_CSV, MediaType.APPLICATION_JSON})
+  public Double get(
+      @PathParam("toItemID") String toItemID,
+      @PathParam("itemID") List<PathSegment> pathSegments) throws OryxServingException {
+
     ALSServingModel model = getALSServingModel();
     float[] toItemVector = model.getItemVector(toItemID);
-    int features = toItemVector.length;
-    double[] userItemRowTimesY = new double[features];
-    for (int j = 0; j < itemIDs.length; j++) {
-      float[] itemVector = model.getItemVector(itemIDs[j]);
-      // 0.5 reflects a "don't know" state
-      double weight = computeTargetQui(model, values[j], 0.5);
-      for (int i = 0; i < features; i++) {
-        userItemRowTimesY[i] += weight * itemVector[i];
-      }
-    }
-    double[] anonymousUserFeatures = model.getYTYSolver().solveDToD(userItemRowTimesY);
+    checkExists(toItemVector != null, toItemID);
+
+    double[] anonymousUserFeatures = buildAnonymousUserFeatures(model, pathSegments);
     return VectorMath.dot(anonymousUserFeatures, toItemVector);
   }
 
-  private static Pair<String[],double[]> parseItemValuePairs(List<PathSegment> pathComponents) {
-    int size = pathComponents.size();
-    String[] itemIDs = new String[size];
-    double[] values = new double[size];
-    for (int i = 0; i < size; i++) {
-      Pair<String,Double> itemValuePair = parseItemValue(pathComponents.get(i).getPath());
-      itemIDs[i] = itemValuePair.getFirst();
-      Double value = itemValuePair.getSecond();
-      values[i] = value == null ? 1.0 : value;
+  static double[] buildAnonymousUserFeatures(ALSServingModel model,
+                                             List<PathSegment> pathSegments) {
+    List<Pair<String,Double>> itemValuePairs = parsePathSegments(pathSegments);
+    int features = model.getFeatures();
+    double[] userItemRowTimesY = new double[features];
+    for (Pair<String,Double> itemValue : itemValuePairs) {
+      float[] itemVector = model.getItemVector(itemValue.getFirst());
+      if (itemVector != null) {
+        // 0.5 reflects a "don't know" state
+        double weight = computeTargetQui(model, itemValue.getSecond(), 0.5);
+        for (int i = 0; i < features; i++) {
+          userItemRowTimesY[i] += weight * itemVector[i];
+        }
+      }
     }
-    return new Pair<>(itemIDs, values);
+    return model.getYTYSolver().solveDToD(userItemRowTimesY);
   }
 
-  private static Pair<String,Double> parseItemValue(String s) {
-    int offset = s.indexOf('=');
-    if (offset < 0) {
-      return new Pair<>(s, null);
-    }
-    return new Pair<>(s.substring(0, offset), Double.parseDouble(s.substring(offset + 1)));
+  static List<Pair<String, Double>> parsePathSegments(List<PathSegment> pathSegments) {
+    return Lists.transform(pathSegments,
+        new Function<PathSegment, Pair<String, Double>>() {
+          @Override
+          public Pair<String, Double> apply(PathSegment segment) {
+            String s = segment.getPath();
+            int offset = s.indexOf('=');
+            return offset < 0 ?
+                new Pair<>(s, 1.0) :
+                new Pair<>(s.substring(0, offset),
+                    Double.parseDouble(s.substring(offset + 1)));
+          }
+        });
   }
 
   /**

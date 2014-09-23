@@ -18,72 +18,68 @@ package com.cloudera.oryx.ml.serving.als;
 
 import java.io.BufferedReader;
 import java.io.IOException;
-import javax.servlet.http.HttpServletRequest;
-import javax.ws.rs.DELETE;
+import java.io.Reader;
+import javax.ws.rs.Consumes;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
-import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
-import com.cloudera.oryx.ml.serving.als.model.ALSServingModel;
+import com.cloudera.oryx.lambda.QueueProducer;
+import com.cloudera.oryx.ml.serving.CSVMessageBodyWriter;
+import com.cloudera.oryx.ml.serving.OryxServingException;
 
 /**
- * <p>Responds to a POST request to {@code /pref/[userID]/[itemID]} and in turn calls
- * {link ALSServingModel#setPreference(String, String, float)}. If the request body is empty,
- * the value is 1.0, otherwise the value in the request body's first line is used.</p>
+ * <p>Responds to a POST request to {@code /pref/[userID]/[itemID]}. The first line of the request
+ * body is parsed as a strength score for the user-item preference. If the request body is empty,
+ * the value is 1.0.</p>
  *
- * <p>Also responds to a DELETE request to the same path, with the same defaults. This corresponds
- * to calling {link ALSServingModel#removePreference(String, String)} instead.</p>
+ * <p>Also responds to a DELETE request to the same path, which will signal the removal
+ * of a user-item association.</p>
  */
 @Path("/pref")
 public final class Preference extends AbstractALSResource {
 
-  @Context
-  private HttpServletRequest httpServletRequest;
-
   @POST
   @Path("{userID}/{itemID}")
-  @Produces(MediaType.APPLICATION_JSON)
-  public Response post(@PathParam("userID") String userID,
-                       @PathParam("itemID") String itemID) {
-    /*
-    ALSServingModel alsServingModel = getALSServingModel();
-    float preferenceValue;
-    try {
-      preferenceValue = readValue(httpServletRequest);
-    } catch (IllegalArgumentException | IOException ignored) {
-      return Response.status(Response.Status.BAD_REQUEST).entity("Bad value").build();
-    }
-     */
-    // TODO: Need to code this up
-    /* Call ALSServingModel.setPreference() */
-    return Response.ok().entity("").build();
+  @Consumes({CSVMessageBodyWriter.TEXT_CSV, MediaType.APPLICATION_JSON, MediaType.TEXT_PLAIN})
+  public void post(
+      @PathParam("userID") String userID,
+      @PathParam("itemID") String itemID,
+      Reader reader) throws IOException, OryxServingException {
+    float itemValue = readRequestData(reader);
+    check(!Float.isNaN(itemValue) && !Float.isInfinite(itemValue), "Bad value: " + itemValue);
+    sendToQueue(userID + "," + itemID + "," + itemValue);
   }
 
+  // Disabled until supported in the model build
+  /*
   @DELETE
   @Path("{userID}/{itemID}")
-  @Produces(MediaType.APPLICATION_JSON)
-  public Response delete(@PathParam("userID") String userID,
-                         @PathParam("itemID") String itemID) {
-    ALSServingModel alsServingModel = getALSServingModel();
+  public void delete(
+      @PathParam("userID") String userID,
+      @PathParam("itemID") String itemID) {
+    sendToQueue(userID + "," + itemID);
+  }
+   */
 
-    // TODO: Need to code this up
-    /* Call ALSServingModel.removePreference() */
-    return Response.ok().entity("").build();
+  private void sendToQueue(String preferenceData) {
+    QueueProducer<?,String> inputQueue = getInputProducer();
+    inputQueue.send(preferenceData);
   }
 
-  private static float readValue(HttpServletRequest httpServletRequest) throws IOException {
-    String line;
-    try (BufferedReader reader = httpServletRequest.getReader()) {
-      line = reader.readLine();
-    }
-    if (line == null || line.isEmpty()) {
+  private static float readRequestData(Reader reader) throws IOException, OryxServingException {
+    BufferedReader bufferedReader =
+        reader instanceof BufferedReader ? (BufferedReader) reader : new BufferedReader(reader);
+    String line = bufferedReader.readLine();
+    if (line == null || line.trim().isEmpty()) {
       return 1.0f;
     }
-    return Float.parseFloat(line);
+    try {
+      return Float.parseFloat(line);
+    } catch (NumberFormatException nfe) {
+      throw new OryxServingException(Response.Status.BAD_REQUEST, nfe.getMessage());
+    }
   }
-
 }

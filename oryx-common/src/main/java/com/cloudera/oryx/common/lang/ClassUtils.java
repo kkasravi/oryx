@@ -44,8 +44,27 @@ public final class ClassUtils {
     }
   }
 
+  /**
+   * @param className fully-qualified class name, which should be known to be available
+   * @param superClass reference type of returned {@link Class}
+   * @param <T> type of returned {@link Class}
+   * @return {@link Class} for that named class
+   */
   public static <T> Class<? extends T> loadClass(String className, Class<T> superClass) {
     return doLoadClass(className, superClass, ClassUtils.class.getClassLoader());
+  }
+
+  /**
+   * @param implClassName class name to text
+   * @return {@code true} if the class exists in the JVM and can be loaded
+   */
+  public static boolean classExists(String implClassName) {
+    try {
+      Class.forName(implClassName);
+      return true;
+    } catch (ClassNotFoundException ignored) {
+      return false;
+    }
   }
 
   private static <T> Class<? extends T> doLoadClass(String implClassName,
